@@ -1,19 +1,20 @@
 ---
-title: "cell type assignment"
+title: "initial exploratory analysis"
 author: "PPA"
 date: "`r Sys.Date()`"
 output:
-  pdf_document: 
-    number_sections: yes
-    toc: yes
-    toc_depth: 4
   html_document:
-    df_print: paged
-geometry: margin=0.5in
-header-includes:
-   - \usepackage{subfig}
-   - \usepackage{float}
+    code_folding: hide
+    toc: true
 ---
+
+<style type="text/css">
+.main-container {
+  max-width: 10000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
 
 
 ```{r setup, include=FALSE}
@@ -62,8 +63,8 @@ library(qs)
 library(ComplexHeatmap)
 library(magick)
 
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.pos = 'H')
-knitr::opts_chunk$set(dev = 'png', dpi = 300, fig.width = 15, fig.asp = 0.8)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.pos = 'H', results = 'hide')
+knitr::opts_chunk$set(dev = 'png', dpi = 72, fig.width = 10, fig.asp = 0.8)
 
 #set root directory to be one level up of the current directory
 #knitr::opts_knit$set(root.dir = '.')
@@ -364,7 +365,7 @@ plot_singleR_heatmap <- function(singleR_results, scale = T, kmeans = 10, return
 
 # Introduction
 
-The goal is to do a basic cell types assignment based on cluster calls, singleR results, ADT stainings and marker gene expression. We want to be able to identify subset of classical CD8 and CD4 T cells, as well as non-classical T cells like MAIT cells.
+Here we will visualize the results from the initial analyses: clustering, marker genes, clusters compositional variations.
 
 
 
@@ -557,9 +558,9 @@ meta %>%
 
 \pagebreak
 
-no T cells carried over from donor T23491
+T cells and NK cells from donor T23491 were emulsioned separately, providing an experimental control to our in silico partitioning of NK and T cells. It is reassuring that the NK cells selected without knowledge of emulsion information all come from the NK emulsion and no T cells carried over from donor T23491.
 
-```{r}
+```{r, fig.asp=0.5}
 
 meta %>%
   dplyr::filter(id == "T23491") %>%
@@ -813,7 +814,13 @@ meta %>%
 ## Clustered heatmap of curated markers
 
 
-```{r, fig.width= 15, fig.asp = 3}
+:::: {style="display: flex;"}
+
+::: {}
+
+### Main heatmap
+
+```{r, fig.width= 5, fig.asp = 4}
 hm_genes <- meta %>%
   dplyr::select(cell.id, curated_cluster) %>%
   left_join(genes_to_plot) %>%
@@ -870,9 +877,21 @@ hm <- draw(hm)
 ```
 
 
-```{r, fig.width= 16, fig.asp = 1.4}
 
+:::
+
+::: {}
+
+
+### Zoom on parts {.tabset}
+
+
+```{r, fig.width= 5, fig.asp = 4, results='asis'}
+i=1
 for(cluster in row_order(hm)) {
+  
+  cat("\n\n#### ", i, "\n\n")
+  
   hm_tmp <- ComplexHeatmap::Heatmap(
     t(hm_genes)[ori_row_order[ori_row_order %in% cluster], ori_col_order],
     col = colorRamp2(quantile(hm_genes, c(0.025, 0.5, 0.975)),
@@ -889,18 +908,23 @@ for(cluster in row_order(hm)) {
   
   cat("\n\n")
   
-  
+  i <- i+1
 }
 
 
 
 ```
 
+:::
+
+::::
 
 
 # Cell type enrichment across treatment groups
 
 ## Variations in frequency
+
+### Empirical compositions
 
 ```{r, fig.width=20}
 
@@ -965,11 +989,12 @@ plot_grid(plotlist = plots, nrow = 3, axis = "lbrt", align = "hv")
 
 ```
 
+### sccomp modelling (beta-binomial)
 
 
+#### Blood
 
-```{r, fig.width=5}
-
+```{r, fig.width=15, fig.asp=1}
 library(sccomp)
 
 
@@ -982,8 +1007,16 @@ sccomp_Blood <- meta %>%
            .cell_group = curated_cluster,
            bimodal_mean_variability_association = TRUE)
 
-plot_summary(sccomp_Blood)
+plots <- plot_summary(sccomp_Blood) 
 
+plot_grid(plots[[1]][[1]], plot_grid(plotlist = plots[2:3], nrow = 2), nrow = 1)
+```
+
+
+
+#### Bone marrow
+
+```{r, fig.width=15, fig.asp=1}
 sccomp_BM <- meta %>%
   dplyr::filter(source == "BMMC") %>%
   sccomp_glm(
@@ -993,8 +1026,9 @@ sccomp_BM <- meta %>%
            bimodal_mean_variability_association = TRUE)
 
 
-plot_summary(sccomp_BM)
+plots <- plot_summary(sccomp_BM)
 
+plot_grid(plots[[1]][[1]], plot_grid(plotlist = plots[2:3], nrow = 2), nrow = 1)
 
 sccomp_joined <- meta %>%
   mutate(sample = paste0(id,source)) %>%
@@ -1009,8 +1043,7 @@ sccomp_joined <- meta %>%
            cores = 5)
 
 
-sccomp_predict(sccomp_joined)
 ```
 
-
+[full analysis](RNAseq_figs.html)
 

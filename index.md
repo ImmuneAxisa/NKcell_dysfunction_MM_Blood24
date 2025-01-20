@@ -6,5 +6,5 @@ This is the repository related to the scRNAseq analysis from [Blanquart et al, B
 
 * you can find all scripts related to the analysis on [https://github.com/ImmuneAxisa/NKcell_dysfunction_MM_Blood24](https://github.com/ImmuneAxisa/NKcell_dysfunction_MM_Blood24)
 * the scripts with intermediate analysis files on [Zenodo](https://doi.org/10.5281/zenodo.13359147)
-* You can browse an illustrative initial exploratory analysis of the dataset [here](NKanalysis.html)
-* You can browse the advanced analysis of the dataset, used to build the manuscript figures [here](RNAseq_figs.html)
+* You can browse an illustrative initial exploratory analysis of the dataset [here](doc/NKanalysis.html)
+* You can browse the advanced analysis of the dataset, used to build the manuscript figures [here](doc/RNAseq_figs.html)

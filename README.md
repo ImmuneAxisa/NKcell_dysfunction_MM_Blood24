@@ -22,15 +22,15 @@ NKcell_dysfunction_MM_Blood24
 ├── LICENSE
 ├── NKcell_dysfunction_MM_Blood24.Rproj
 ├── README.md #this file
+├── index.html # rendered github pages website index
+├── index.md #github pages website index
 ├── data
 │   └── List Pathways_clusters.xlsx #curated genesets from publications
 ├── doc
 │   ├── NKanalysis.Rmd # initial exploratory analysis
 │   ├── NKanalysis.html # rendered initial exploratory analysis
 │   ├── RNAseq_figs.Rmd # advanced analysis and publication figures construction
-│   ├── RNAseq_figs.html # rendered advanced analysis and publication figures construction
-│   ├── index.html # rendered github pages website index
-│   └── index.md #github pages website index
+│   └── RNAseq_figs.html # rendered advanced analysis and publication figures construction
 ├── figs
 │   ├── manuscript # pdf panels for manuscript figure construction
 │   │   ├── MELD_UMAP.pdf

@@ -1,0 +1,2581 @@
+---
+title: "NK exploratory analysis and manuscript figures generation"
+author: "PPA"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 10000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+
+```{r setup, include=FALSE}
+
+##########################
+## Packages and options ##
+##########################
+
+library(gridExtra)
+library(knitr)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(stringr)
+library(ggplot2)
+library(ggExtra)
+library(stats)
+# library(RColorBrewer)
+library(viridis)
+library(scales)
+library(ggrepel)
+library(circlize)
+library(RColorBrewer)
+library(gplots)
+library(cowplot)
+library(gtable)
+library(data.table)
+library(Seurat)
+library(hdf5r)
+library(ggsci)
+library(ggridges)
+library(forcats)
+library(kableExtra)
+library(sp)
+# library(FactoMineR)
+# library(factoextra)
+library(wesanderson)
+library(Matrix)
+library(DESeq2)
+library(edgeR)
+library(ashr)
+library(vsn)
+library(ggsci)
+library(qs)
+library(ComplexHeatmap)
+library(tidyHeatmap)
+library(magick)
+library(biomaRt)
+library(ggpp)
+library(here)
+library(ggthemes)
+library(tidygraph)
+library(ggraph)
+library(slingshot)
+library(readr)
+library(purrr)
+library(sccomp)
+
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.pos = 'H', results = 'hide')
+knitr::opts_chunk$set(dev = 'png', dpi = 72, fig.width = 15, fig.asp = 0.8)
+
+#set root directory to be one level up of the current directory
+#knitr::opts_knit$set(root.dir = '.')
+
+#Caching option when tweaking the knitting
+knitr::opts_chunk$set(cache = T)
+
+WRITE_FILES <- FALSE
+
+
+##################
+## ggplot theme ##
+##################
+
+theme_mrl <- function(x = 1, ...) {
+  theme_minimal() +
+    theme(
+      axis.line = element_line(),
+      axis.ticks.x = element_line(),
+      axis.ticks.y = element_line(),
+      axis.text.x = element_text(size = 12*x,face = "bold", angle = 45, vjust = 0.9, hjust=0.9),
+      axis.text.y = element_text(size = 12*x,face = "bold"),
+      axis.title.x = element_text(size = 12*x,face = "bold"),
+      axis.title.y = element_text(size = 12*x,face = "bold"),
+      strip.background = element_rect(fill="gray20", colour="gray20", linetype="solid"),
+                                      strip.text = element_text(size=12*x, colour="white", face="bold"),
+                                      legend.title = element_text(size=14*x, face = "bold"),
+                                      legend.text = element_text(size=12*x, color="gray20", face="bold"),
+      legend.background = element_rect(fill = "transparent", colour = "transparent"),
+      plot.title =  element_text(hjust=0.5, vjust=2, face="bold"),
+      plot.subtitle = element_text(hjust=0.5, vjust=3, face="italic"),
+      plot.caption = element_text(hjust = 0, face = "italic")
+                                      ) +
+    theme(...)
+}
+
+
+opts <- options()  # save old options
+
+
+# plotting options
+options(ggplot2.continuous.colour="viridis")
+options(ggplot2.continuous.fill = "viridis")
+
+palette <- c(pal_rickandmorty()(12),pal_jco()(10), pal_futurama()(11), pal_tron()(7), pal_npg()(10))
+
+
+palette <- tableau_color_pal(type = "regular")(10)
+
+
+# path to save manuscript figure panels
+
+manuscript_figures_path <- "figs/manuscript"
+
+```
+
+
+```{css, echo=FALSE}
+/* Move code folding buttons to the left */
+div.col-md-12 .pull-right {
+  float: left !important
+}
+```
+
+wrapper functions for plotting:
+
+```{r, fig.width=10}  
+
+
+theme_umap <- function() {
+  theme_void() +
+    theme(panel.background = element_rect(fill = "grey", color = "black", size = 2),
+          legend.position = c(1,0),
+          legend.justification = c(1.1,0),
+          legend.direction = "horizontal",
+          legend.text = element_text(angle = 45, hjust = 1, vjust = 1),
+          legend.title = element_blank(),
+          plot.margin = unit(c(1,1,1,1), "mm"))
+  
+  
+}
+
+
+# function to overlay values onto the UMAP embeddings
+hex_plots <-
+  function(data,
+           dim1,
+           dim2,
+           color,
+           facets = NULL,
+           CI = 0.05,
+           fun = "mean",
+           bins = 200,
+           divergent_scale = F) {
+    message("calc CI")
+    # calculate the quantilles for CI limits onthe color scale.
+    if (CI) {
+      lims <- quantile(pull(data, color), probs = c(CI / 2, 1 - CI / 2))
+      
+      # if user supplied CI leads to 0 values ef no range, set automatically to 1%
+      if (lims[2] == 0) {
+        CI <- 0.01
+        lims <-
+          quantile(pull(data, color), probs = c(CI / 2, 1 - CI / 2))
+      }
+      # if still 0 values still, do not set any CI
+      if (lims[2] == 0) {
+        lims <- c(NA, NA)
+      }
+      
+    } else {
+      lims <- c(NA, NA)
+    }
+    
+    message("compute plot")
+    plot <- ggplot(data, aes_string(dim1, dim2)) +
+      stat_summary_hex(
+        bins = bins,
+        fun = fun,
+        aes(z = !!ensym(color), color = ..value..),
+        lwd = 0.1
+      ) +
+      ggtitle(color) +
+      theme_mrl() +
+      guides(fill = guide_none()) +
+      theme_umap()
+    
+    
+    if (divergent_scale) {
+      plot <- plot  +
+        scale_fill_gradient2(
+          midpoint = 0.5,
+          low = "royalblue",
+          mid = "grey80",
+          high = "red4",
+          limits = lims,
+          oob = squish
+        ) +
+        scale_color_gradient2(
+          midpoint = 0.5,
+          low = "royalblue",
+          mid = "grey80",
+          high = "red4",
+          limits = lims,
+          oob = squish
+        )
+    } else {
+      plot <- plot +
+        scale_fill_viridis(limits = lims, oob = squish) +
+        scale_color_viridis(limits = lims, oob = squish)
+    }
+    
+    if (is.null(facets)) {
+      return(plot)
+    } else {
+      return(plot + facet_wrap(as.formula(facets)))
+    }
+  }
+
+ridges_plots <- function(data,dim1,dim2) {
+  
+  ggplot(data, 
+       aes_string(dim1, 
+                  dim2)) +
+  stat_density_ridges(aes(fill = factor(stat(quantile))),
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = c(0.01,0.05, 0.1,0.9,0.95,0.99), quantile_lines = TRUE,
+    color = NA) +
+  facet_grid(curated_types~., scales = "free_y", space = "free_y") +
+  scale_fill_manual(labels = c("0.01","0.05", "0.1","0.1-0.9","0.9","0.95","0.99"),
+                    values = c("black","grey80","black","grey80","black","grey80","black"))
+}
+
+
+
+
+
+
+SingleR_heatmap <- function(singleR_results, meta, k, keepBest = T) {
+  
+  # Input
+  # singleR results: a list with 1/ scores matrix (rows = cluster/cells, col = refs), 2/ calls table on each cells (cells as rows)
+  # metadata table with cell barcodes (or cluster calls) as rownames
+  # k parameter for cutree, in order to split the dendrogram of cells/clusters
+  
+  library(ComplexHeatmap)
+  
+  # add barcodes back to the scores matrix
+  rownames(singleR_results[[1]]) <- rownames(singleR_results[[2]])
+  
+  #print(rownames(singleR_results[[1]]))
+  #print(rownames(meta))
+  #enforce ordering of cells in the same in scores matrix and metadata
+  singleR_results <- singleR_results[[1]][rownames(meta),]
+  
+  # scale scores per cell to % of max score
+  singleR_results <- singleR_results / matrixStats::rowMaxs(singleR_results)
+  
+  # Only keep refs that have best score for at least one cells
+  if(keepBest) {
+    singleR_results <- singleR_results[,matrixStats::colMaxs(singleR_results) == 1]
+  }
+  
+
+  # Print final dim before plotting
+  cat("Dimension of matrix to plot after filering",dim(singleR_results))
+
+
+
+  # hierrachical clustering
+  row_clust <- hclust(dist(t(singleR_results)))
+
+  col_clust <- hclust(dist(singleR_results))
+
+  # cut tree and assign color for heatmap annotation
+  cluster_split <- paste0("cluster ", cutree(col_clust, k = k))
+
+  cluster_col <- ggsci::pal_futurama()(k)
+
+  names(cluster_col) <- unique(cluster_split)
+
+  #plot heatmap
+  Heatmap(t(singleR_results),
+        col = c(viridis(1000),"#ff0000"),
+        show_column_names = F,
+        bottom_annotation = HeatmapAnnotation(meta),
+        top_annotation = HeatmapAnnotation("cluster" = cluster_split, 
+                                           col = list("cluster" =cluster_col)),
+        cluster_rows = row_clust,
+        cluster_columns = col_clust,
+        use_raster = T,
+        raster_quality = 1)
+  
+  
+  
+  
+  
+  
+}
+
+
+```
+
+Import data:
+
+```{r}
+# import clustering and umap data
+seurat <- qread("results/NK_analysis/seurat_objects/analysisNK_Ruchan.qs") 
+
+adt <- seurat@assays$ADT@data %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("cell.id") %>% 
+  dplyr::rename_with(~gsub("-TotalSeqB$","",.))
+
+
+
+# import ADT normalized data from my treatment of data
+# adt <- qread("../01A_HCvsMM_10x/results/clustering_typing/adt_norm_class.qs") %>%
+#   dplyr::select(-c(nCount_ADT:emulsion, adt_cell_type))
+
+meta <- seurat@meta.data %>%
+  tibble::rownames_to_column("cell.id") %>%
+  left_join(
+    seurat@reductions$umap@cell.embeddings %>% as.data.frame() %>% tibble::rownames_to_column("cell.id")
+  ) %>%
+  left_join(
+    adt
+  )
+
+meta <- meta %>%
+  mutate(curated_cluster = seurat_clusters) %>%
+  mutate(emulsion = orig.ident)
+
+umap_settings <- paste0("UMAP_", c(1, 2))
+```
+
+# UMAP and clustering
+
+```{r, results='markup'}
+labels <- tribble(
+  ~ curated_cluster, ~ cluster_label,
+  1, "CD56_dim",
+  2, "activated",
+  3, "Terminally_diff",
+  4, "adaptive_like_1",
+  5, "CD56_bright",
+  6, "transitional",
+  7, "adaptive_like_2",
+  8, "BM_resident"
+) %>%
+  mutate(curated_cluster = as.factor(curated_cluster))
+
+gt::gt(labels)
+```
+
+
+```{r, fig.width=15}
+main_umap <- meta %>%
+  left_join(labels) %>%
+  mutate(cluster_label = fct_reorder(paste(
+    curated_cluster, cluster_label, sep = ": "
+  ), as.numeric(curated_cluster))) %>%
+  dplyr::rename(x = umap_settings[1], y = umap_settings[2]) %>%
+  {
+    ggplot(., aes(x,y)) +
+      geom_point(aes(color = cluster_label)) +
+      geom_density2d(
+        aes(group = cluster_label),
+        bins = 4,
+        contour_var = "ndensity",
+        color = "black",
+        size = 2
+      ) +
+      geom_density2d(aes(color = cluster_label),
+                     bins = 4,
+                     contour_var = "ndensity") +
+      scale_alpha(range = c(0.2, 1)) +
+      theme_mrl() +
+      theme(panel.background = element_rect(fill = 'grey90', color = NA)) +
+      scale_fill_manual(values = alpha(palette, 0.5)) +
+      scale_color_manual(values = palette) +
+      theme_void() +
+      theme(panel.background = element_rect(
+        fill = "grey",
+        color = "black",
+        size = 2
+      ),
+      legend.title = element_blank(),
+      legend.text = element_text(size = rel(2), face = "bold"),
+      #legend.spacing.y = unit(0.5, 'cm'),
+      aspect.ratio = 0.7) 
+  }
+
+
+main_umap <- main_umap +
+  theme(plot.margin = unit(rep(2,4), "mm")) +
+  guides(alpha = guide_none(),
+         color = guide_legend(
+           byrow = TRUE,
+           override.aes = list(size = 7, geom = "point", linetype = NA)
+         ))
+```
+
+
+```{r, fig.width=15, fig.asp= 0.5}
+p1 <- meta %>%
+  left_join(labels) %>%
+  mutate(source = gsub("MC$", "", source)) %>%
+  mutate(cluster_label = fct_reorder(paste(
+    curated_cluster, cluster_label, sep = ": "
+  ), as.numeric(curated_cluster))) %>%
+  dplyr::rename(x = umap_settings[1], y = umap_settings[2]) %>%
+  {
+    ggplot(., aes(x,y)) +
+      geom_point(aes(color = cluster_label)) +
+      geom_density2d(
+        #aes(group = cluster_label),
+        bins = 8,
+        contour_var = "ndensity",
+        color = "black",
+        size = 1
+      ) +
+      scale_alpha(range = c(0.2, 1)) +
+      theme_mrl() +
+      theme(panel.background = element_rect(fill = 'grey90', color = NA)) +
+      scale_fill_manual(values = alpha(palette, 0.5)) +
+      scale_color_manual(values = palette) +
+      theme_void() +
+      theme(panel.background = element_rect(
+        fill = "grey",
+        color = "black",
+        size = 2
+      ),
+      legend.title = element_blank(),
+      legend.text = element_text(size = rel(2), face = "bold"),
+      #legend.spacing.y = unit(0.5, 'cm'),
+      aspect.ratio = 0.7) 
+  }
+
+
+p1 <- p1 +
+  theme(legend.position = "none",
+        #plot.margin = unit(rep(1,4), "mm"),
+        strip.text.y.left = element_text(size = 20, angle = 0),
+        strip.text.x = element_text(size = 20, angle = 0)) +
+  facet_grid(condition ~ source, switch = "y")
+```
+
+
+```{r, fig.width=25, fig.asp=0.3}
+plot_grid(main_umap + theme(legend.position = "none"), p1, get_legend(main_umap), 
+          nrow = 1,
+          align = "hv",
+          axis = "tblr")
+
+
+
+ggsave(file.path(manuscript_figures_path, "main_umaps.pdf"), width = 60, height = 20, units = "cm")
+
+```
+
+
+
+# CITE-seq markers overlay
+
+```{r}
+
+colnames(adt)[-1] %>%
+  lapply(function(cite_param) {
+    hex_plots(meta %>% dplyr::filter(!is.na(CD16)),
+              umap_settings[1],
+              umap_settings[2],
+              cite_param,
+              CI = 0.1) +
+      theme(legend.justification = c(1.1,-0.1),
+            legend.direction = "vertical",
+            legend.text = element_text(
+              angle = 0,
+              hjust = 1,
+              vjust = 0
+            ),
+      )
+  }) %>%
+  patchwork::wrap_plots()
+
+#colnames(meta)
+```
+
+
+# Heatmap of curated markers
+
+We use a set of marker genes (mixture of PPA's and Eve's curation) to illustrate the transcriptomic differences across clusters
+
+## initial heatmap with z-scores
+
+```{r, results='markup'}
+
+
+
+curated_cluster_markers <- list(
+  "1" = c("IKZF2",
+        "PRF1","FCGR3A","CX3CR1","FCER1G","PTGDS","GZMB","GZMA","TXNIP", "FCGR3A", "CD226"),
+  "2" = c("HLA-A", "HLA-B",
+        "PRF1","NKG7","GZMB","STAT4"),
+  "3" = c("REL","NFKB1","NFKBIA","TNF","RELB"),
+  "4" = c("IL32", "ITGB1", "CD52", "CLEC2D", "KLRK1", "KLRC3", "CD3E", "TGFBR3",
+        "IL32","GZMH","CCL5","CD52","S100A6","KLRC2","S100A4", "CD3E","KLRC3","IFIT2","PMAIP1","IFIT3","TNF","OASL","CCL3L1","IFIT1","NFKBIZ","CCL4L2"),
+  "5" = c("TCF7", "CD44", "IL7R", "SELL", "IL18R1", 
+        "GZMK","KLRC1","SELL","XCL2","XCL1","CD44","COTL1","IL7R"),
+  "6" = c("PTCH2", "TMEM107", "CROCC"),
+  "7" = c("TNF", "IFIT2", "IFIT3", "IFIH1", "SP140", "NFKBIZ", "OASL"),
+  "8" = c("EOMES", "ID2", "TOX2", "CD7", "IL2RB", "KLRB1", "CD69", "CCL3", "XCL2",
+        "CCL3","XCL1","XCL2","GZMK","CD160","CEBPD","IRF8")
+)
+
+curated_cluster_markers %>%
+  enframe("cluster", "markers") %>%
+  gt::gt()
+
+curated_cluster_markers <- do.call(c, curated_cluster_markers) %>% unique()
+
+
+```
+
+```{r}
+genes_to_plot <- seurat@assays$RNA@data[curated_cluster_markers,] %>% #marker_genes_to_plot
+  as.matrix() %>%
+  t() %>%
+  as.data.frame() %>%
+  dplyr::rename_with(~paste0("gene_",.)) %>%
+  tibble::rownames_to_column("cell.id")
+```
+
+
+```{r, fig.width= 4, fig.asp = 4}
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -!matches("^gene_")) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), pct = sum(val > 0) / n() * 100)
+
+pct_genes <- hm_genes %>%
+  dplyr::select(-avg) %>%
+  mutate(feat = gsub("gene_", "", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "pct") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+
+hm_genes <- hm_genes %>%
+  dplyr::select(-pct) %>%
+  mutate(feat = gsub("gene_", "", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+
+
+
+hm <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        row_split = 5,
+                        column_title_gp = gpar(cex = 0, fontsize = 0),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "z-score")) 
+
+
+
+hm <- draw(hm)
+ori_col_order <- column_order(hm)
+ori_row_order <- row_order(hm)
+
+cl_dend <- dist(hm_genes) %>% hclust()
+```
+
+
+```{r, eval=FALSE}
+pdf(file.path(manuscript_figures_path, "hm_genes.pdf"), width = 4, height = 16)
+
+hm
+
+dev.off()
+```
+
+
+
+## dotplot heatmap
+
+
+
+```{r, fig.width= 4, fig.asp = 4}
+
+
+pct_genes <- pct_genes[rownames(hm_genes), colnames(hm_genes)]
+
+#from https://divingintogeneticsandgenomics.rbind.io/post/clustered-dotplot-for-single-cell-rnaseq/
+
+col_fun <- colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4"))
+
+cell_fun <- function(j, i, x, y, w, h, fill) {
+  grid.rect(
+    x = x,
+    y = y,
+    width = w,
+    height = h,
+    gp = gpar(col = NA, fill = NA)
+  )
+  grid.circle(
+    x = x,
+    y = y,
+    r = pct_genes[i, j] * min(unit.c(w, h)) * 0.7,
+    gp = gpar(fill = col_fun(hm_genes[i, j]), col = NA)
+  )
+}
+
+hm_genes <- t(hm_genes)
+pct_genes <- t(pct_genes)
+
+hm <- ComplexHeatmap::Heatmap(hm_genes,
+                        col = col_fun,
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        cell_fun = cell_fun,
+                        rect_gp = gpar(type = "none"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        row_split = 5,
+                        column_title_gp = gpar(cex = 0, fontsize = 0),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "z-score"),
+                        border = "black") 
+
+
+
+hm <- draw(hm)
+
+
+
+
+
+hm_genes <- matrix(c(1,20,50))
+
+
+
+
+
+```
+
+
+
+
+
+
+## 3 vs 1 differences
+
+We first remove low detection genes:
+
+```{r}
+markers <- qread("results/NK_analysis/clustering_typing/clusters_markers_table_harmony_NK_paired.qs") %>%
+  dplyr::filter(group == 3) %>%
+  dplyr::filter(groupA == 1 | groupB == 1)
+
+
+markers %>% 
+  ggplot(aes(avgExpr + 10^-4)) +
+  geom_histogram() +
+  scale_x_log10() +
+  theme_mrl() +
+  annotation_logticks(sides = "b") +
+  geom_vline(xintercept = 0.05)
+```
+
+
+Then visualize the markers using an MA plot.
+
+```{r}
+markers %>%
+  {
+    dplyr::filter(., avgExpr > 0.05) %>%
+      ggplot(aes(avgExpr, auc)) +
+      geom_hex(aes(color = after_scale(fill)), bins = 100) +
+      geom_label_repel(
+        data = dplyr::filter(., auc > 0.65),
+        aes(label = feature),
+        force = 10,
+        ylim = c(0.7, 1),
+        max.overlaps = 50
+      ) +
+      geom_label_repel(
+        data = dplyr::filter(., auc < 0.35),
+        aes(label = feature),
+        force = 10,
+        ylim = c(0, 0.3),
+        max.overlaps = 50
+      ) +
+      scale_x_log10() +
+      scale_fill_viridis(trans = "log10") +
+      theme_mrl(2) +
+      theme(
+        panel.border = element_rect(
+          color = "black",
+          fill = NA,
+          linetype = "solid"
+        ),
+        plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "npc"),
+        axis.line.x = element_blank(),
+        axis.line.y = element_blank(),
+        legend.position = c(0, 1),
+        legend.justification = c(0, 1),
+      ) +
+      scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+      geom_hline(yintercept = c(0.5, 0.65, 0.35),
+                 color = "red") +
+      labs(y = expression("AUC\ncluster 1" %<->% "cluster 3"),
+           x = "average gene expression") +
+      guides(fill = guide_colourbar(
+        title = "gene count",
+        label.position = "left",
+        label.hjust = 1
+      )) +
+      annotation_logticks(sides = "b")
+  }
+
+```
+
+
+
+# Cell type enrichment across treatment groups
+
+## Variations in frequency
+
+
+### sccomp based inference
+
+```{r, fig.width=5, results='hide'}
+
+
+
+sccomp_Blood <- meta %>%
+  dplyr::filter(source == "PBMC") %>%
+  sccomp_glm(
+           formula_composition = ~condition,
+           .sample = id,
+           .cell_group = curated_cluster,
+           bimodal_mean_variability_association = TRUE)
+
+plots_blood <- plot_summary(sccomp_Blood, 0.05)
+
+sccomp_BM <- meta %>%
+  dplyr::filter(source == "BMMC") %>%
+  sccomp_glm(
+           formula_composition = ~condition,
+           .sample = id,
+           .cell_group = curated_cluster,
+           bimodal_mean_variability_association = TRUE)
+
+
+plots_BM <- plot_summary(sccomp_BM, 0.05)
+
+
+
+
+
+sccomp_joined <- meta %>%
+  mutate(sample = paste0(id,source)) %>%
+  group_by(condition) %>%
+  mutate(donor = paste0("D",unclass(as.factor(id)))) %>%
+  ungroup() %>%
+  sccomp_glm(
+           formula_composition = ~ condition + donor:source + condition:source,
+           .sample = sample,
+           .cell_group = curated_cluster,
+           bimodal_mean_variability_association = TRUE,
+           cores = 5)
+
+
+plots_blood$boxplot[[1]] + facet_wrap(.~curated_cluster, nrow = 2) +
+  scale_y_continuous() +
+  ggtitle("Blood")
+plots_BM$boxplot[[1]] + facet_wrap(.~curated_cluster, nrow = 2) +
+  scale_y_continuous() +
+  ggtitle("BM")
+
+
+
+merged_metrics <- rbind(mutate(sccomp_Blood, source = "PBMC"),
+                       mutate(sccomp_BM, source = "BMMC")) %>%
+  dplyr::filter(parameter == "conditionMM") %>%
+  dplyr::select(curated_cluster, source, matches("^c_"))
+
+p_val_metrics <- merged_metrics %>%
+  dplyr::select(curated_cluster, source, label = c_FDR) %>%
+  mutate(start = "HD", end = "MM", y = 0.5, label = case_when(label < 0.001 ~ "***",
+                                                              label < 0.01 ~ "**",
+                                                              label < 0.05 ~ "*",
+                                                              .default = NA))
+
+
+per_tissue_plots <- merged_metrics %>%
+  mutate(c_FDR = ifelse(c_FDR < 0.05, "FDR < 0.05", "non significant")) %>%
+  group_by(source) %>%
+  nest() %>%
+  mutate(plots = map2(data, source, ~ ggplot(.x, aes(
+    c_effect, fct_reorder(curated_cluster, c_effect), color = c_FDR
+  )) +
+    geom_errorbarh(aes(xmin = c_lower, xmax = c_upper)) +
+    geom_point() +
+    theme_mrl() +
+    theme(legend.title = element_blank(), legend.position = c(1,0), legend.justification = c(1,0)) +
+    labs(title = .y, x = "log fold change", y = "cluster") +
+    scale_color_manual(values = c("red", "black")) +
+    geom_vline(xintercept = 0))) %>%
+  pull(plots)
+
+
+
+tissue_comparison <- merged_metrics %>%
+  mutate(c_FDR = ifelse(c_FDR < 0.05, "FDR < 0.05", "non significant")) %>%
+  group_by(source) %>%
+  nest() %>%
+  deframe()
+
+comparison_plot <- left_join(dplyr::rename_with(tissue_comparison[["PBMC"]], ~gsub("c_", "PBMC_", .)),
+          dplyr::rename_with(tissue_comparison[["BMMC"]], ~gsub("c_", "BMMC_", .))) %>%
+  ggplot(aes(PBMC_effect, BMMC_effect)) +
+  geom_abline() +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  geom_errorbarh(aes(xmin = PBMC_lower, xmax = PBMC_upper, color = PBMC_FDR)) +
+  geom_errorbar(aes(ymin = BMMC_lower, ymax = BMMC_upper, color = BMMC_FDR)) +
+  scale_color_manual(values = c("red", "black")) +
+  geom_label(aes(label = curated_cluster)) +
+  theme_mrl() +
+  theme(legend.position = c(1,0),
+        legend.justification = c(1,0),
+        legend.title = element_blank()) +
+  labs(title = "tissue comparison", x = "PBMC LFC", y = "BMMC LFC")
+  
+
+
+sccomp_results <- plot_grid(plotlist = c(per_tissue_plots, list(comparison_plot)), nrow = 1)
+```
+
+
+```{r, fig.width=20}
+
+
+
+frequencies <- meta %>%
+  #dplyr::filter(percent.BCR < 1) %>%
+  group_by(source, condition, id, curated_cluster, .drop = F) %>%
+  dplyr::summarize(count = n()) %>%
+  #pivot_wider(names_from = curated_cluster, values_from = count)
+  ungroup() %>%
+  group_by(source, condition, id) %>%
+  mutate(freq = count / sum(count)) %>%
+  left_join(labels) %>%
+  mutate(cluster_label = fct_reorder(paste(
+    curated_cluster, "\n", cluster_label
+  ), as.numeric(curated_cluster))) 
+
+plots <- frequencies %>%
+  group_by(curated_cluster, cluster_label) %>%
+  nest() %>%
+  mutate(
+    plot = purrr::map2(
+      data,
+      paste(curated_cluster),
+      ~ ggplot(.x,
+        aes(condition, freq)
+      ) +
+        geom_boxplot(aes(fill = condition), outlier.shape = NA) +
+        #geom_boxplot(width = 0.5, outlier.shape = NA, position = position_nudge(-0.3)) +
+        #geom_point(aes(size = count), position = position_nudge(0.2), alpha = 0.5) +
+        #stat_summary() +
+        #geom_jitter(fill = "grey", shape = 21, color = "black") +
+        facet_wrap(.~source, nrow = 1, strip.position = "bottom") +
+        theme_mrl() +
+        scale_y_continuous(limits = c(0, 0.5)) +
+        #scale_y_log10() +
+        scale_alpha_continuous(range = c(0.5, 1)) +
+        scale_size_continuous(trans = "log10") +
+        # ggsignif::geom_signif(comparisons = list(c("HD", "MM")),
+        #                       map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, " " = 1),
+        #                       y_position = 0.49,
+        #                       margin_top = 0,
+        #                       tip_length = 0) +
+        ggsignif::geom_signif(data = p_val_metrics %>% dplyr::filter(curated_cluster == .y),
+                              aes(xmin = start, xmax = end, annotations = label, y_position = y),
+                              map_signif_level = c("***"=0.001, "**"=0.01, "*"=0.05, " " = 1),
+                              margin_top = 0,
+                              tip_length = 0, manual = TRUE) +
+        ggtitle(.y) +
+        theme(legend.position = "none",
+              axis.text.x = element_blank(),
+              axis.text.y = element_blank(),
+              axis.title.x = element_blank(),
+              axis.ticks.x = element_blank(),
+              axis.ticks.y = element_blank(),
+              axis.title.y = element_blank(),
+              plot.margin = unit(c(0.5,0.2,0.5,-2), "cm")) +
+        scale_fill_jco()
+      
+      
+    )
+  ) %>%
+  arrange(curated_cluster) %>%
+  pull(plot) 
+
+legend <- get_legend(
+  plots[[1]] + theme(
+    legend.position = "left",
+    legend.text = element_text(size = rel(2)),
+    legend.title = element_text(size = rel(2)),
+    legend.justification = c(0, 1)
+  )
+)
+
+legend <- list(legend)
+
+plots[[1]] <- plots[[1]] + theme(
+  axis.title.y = element_text(
+    hjust = 0.5,
+    vjust = 0.5,
+    angle = 90,
+    size = rel(2)
+  ),
+  axis.text.y = element_text(size = 12, face = "bold"),
+  axis.ticks.y = element_line(color = "black")
+) +
+  ylab("Frequencies\n")
+
+freq_plot <- plot_grid(plotlist = c(legend,plots), nrow = 1, axis = "lbrt", align = "hv")
+
+plot_grid(freq_plot, sccomp_results, ncol = 1)
+ggsave(file.path(manuscript_figures_path, "frequency.pdf"), width = 35, height = 35, units = "cm")
+
+```
+
+
+# Custom genesets enrichment analysis
+
+We use transcriptpmic signatures from other publications to characterize NK cells clusters:
+
+```{r}
+genesets_path <- file.path("data", "List Pathways_clusters.xlsx")
+genesets <- readxl::excel_sheets(genesets_path) %>%
+  lapply(function(tab_name) {
+    
+    tab <- readxl::read_excel(genesets_path, tab_name)
+    
+    if(colnames(tab)[1] != "gene") {
+      tab <- readxl::read_excel(genesets_path, tab_name, col_names = F) %>%
+        dplyr::rename(gene = 1) %>%
+        mutate(geneset = tab_name) %>%
+        dplyr::select(geneset, gene)
+    } 
+    else 
+      {
+      tab <- tab %>%
+        dplyr::select(gene, avg_logFC) %>%
+        mutate(geneset = ifelse(avg_logFC > 0, paste0(tab_name, "_up"), paste0(tab_name, "_dn"))) %>%
+        dplyr::select(geneset, gene)
+    }
+    
+    return(tab)
+  }) %>%
+  bind_rows()
+
+genesets_cleaned <- genesets %>%
+  dplyr::mutate(geneset = gsub(" ", "_", geneset))
+```
+
+
+## Raw genesets
+
+Run module scoring (optional, not run interactively by default).
+
+
+```{r, eval=FALSE}
+genesets_list <- genesets_cleaned %>%
+  group_by(geneset) %>%
+  summarize(gene = list(gene)) %>%
+  deframe()
+
+seurat <- AddModuleScore(seurat, genesets_list, name = paste0(names(genesets_list), "xxx"))
+
+geneset_results <- seurat@meta.data %>% dplyr::select(matches("xxx[0-9]*$")) %>%
+  dplyr::rename_with(~str_replace(.,"xxx[0-9]*$", "")) %>%
+  as.matrix()
+
+
+qsave(geneset_results, "results/NK_analysis/clustering_typing/custom_NK_genesets.qs")
+```
+
+Regress library size effect on module scores:
+
+```{r, fig.width=60, fig.asp=0.1, results='hide'}
+
+geneset_results <- qread("results/NK_analysis/clustering_typing/custom_NK_genesets.qs")
+
+lib_size <- meta %>%
+  dplyr::select(cell.id, nCount_RNA) %>%
+  deframe()
+
+lib_size <- lib_size[rownames(geneset_results)]
+
+par(mfcol=c(2,ncol(geneset_results)))
+
+# regress library size effect
+geneset_results_norm <- apply(geneset_results, 2, function(val, libs) {
+  
+  
+  
+  
+  res <- residuals(lm(val ~ libs))
+  
+  
+  print(plot(libs, val, main = "raw"))
+  print(plot(libs, res, main = "regressed"))
+  
+  rescale(res)
+}, libs = log(lib_size))
+
+# convert to dataframe to joint metadata like cluster calls
+genes_to_plot <- geneset_results_norm %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("cell.id")
+
+```
+
+```{r, fig.width= 10, fig.asp = 1}
+
+# summarise to cluster level
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -c(cell.id, curated_cluster)) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), sd = sd(val))
+
+
+# back to matrix format
+hm_genes <- hm_genes %>%
+  dplyr::select(-sd) %>%
+  dplyr::filter(!grepl("_dn$", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+  #apply(2, rescale)
+
+
+
+hm_raw <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        column_title = "raw genesets, z-score",
+                        #row_split = 5,
+                        column_title_gp =  gpar(cex = 1, fontsize = 16, fontface = "bold"),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "z-score")) 
+
+
+
+#hm <- draw(hm)
+#ori_col_order <- column_order(hm)
+#ori_row_order <- row_order(hm)
+
+```
+
+
+
+
+```{r, fig.width= 10, fig.asp = 1}
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -c(cell.id, curated_cluster)) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), sd = sd(val))
+
+hm_genes <- hm_genes %>%
+  dplyr::select(-sd) %>%
+  dplyr::filter(!grepl("_dn$", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  #scale()
+  apply(2, rescale)
+
+
+row_clust <- t(hm_genes) %>% dist() %>% hclust()
+
+hm2_raw <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        cluster_rows = row_clust,
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        column_title = "raw genesets, [0,1] score",
+                        #row_split = 5,
+                        row_dend_reorder = row_clust %>% as.dendrogram() %>% order.dendrogram() %>% {.*-1},
+                        column_title_gp = gpar(cex = 1, fontsize = 16, fontface = "bold"),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "[0,1] score"))
+```
+
+
+```{r, fig.width= 10, fig.asp = 1}
+
+hm_raw
+hm2_raw
+
+#hm <- draw(hm)
+#ori_col_order <- column_order(hm)
+#ori_row_order <- row_order(hm)
+
+```
+
+## cleaned genesets
+
+Run module scoring (optional, not run interactively by default).
+
+```{r, eval = FALSE}
+genesets_list <- genesets_cleaned %>%
+  dplyr::filter(!grepl("RP[SL]", gene)) %>%
+  group_by(geneset) %>%
+  summarize(gene = list(gene)) %>%
+  deframe()
+
+seurat <- AddModuleScore(seurat, genesets_list, name = paste0(names(genesets_list), "xxx"))
+
+geneset_results <- seurat@meta.data %>% dplyr::select(matches("xxx[0-9]*$")) %>%
+  dplyr::rename_with(~str_replace(.,"xxx[0-9]*$", "")) %>%
+  as.matrix()
+
+qsave(geneset_results, "results/NK_analysis/clustering_typing/custom_NK_genesets_cleaned.qs")
+```
+
+
+Regress library size effect on module scores:
+
+```{r, fig.width=60, fig.asp=0.1, results='hide'}
+
+geneset_results <- qread("results/NK_analysis/clustering_typing/custom_NK_genesets_cleaned.qs")
+lib_size <- meta %>%
+  dplyr::select(cell.id, nCount_RNA) %>%
+  deframe()
+
+lib_size <- lib_size[rownames(geneset_results)]
+
+par(mfcol=c(2,ncol(geneset_results)))
+
+# regress library size effect
+geneset_results_norm_clean <- apply(geneset_results, 2, function(val, libs) {
+  
+  
+  
+  
+  res <- residuals(lm(val ~ libs))
+  
+  
+  print(plot(libs, val, main = "raw"))
+  print(plot(libs, res, main = "regressed"))
+  
+  rescale(res)
+}, libs = log(lib_size))
+
+# convert to dataframe to joint metadata like cluster calls
+genes_to_plot <- geneset_results_norm_clean %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("cell.id")
+
+```
+
+```{r, fig.width= 10, fig.asp = 1}
+
+# summarise to cluster level
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -c(cell.id, curated_cluster)) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), sd = sd(val))
+
+
+# back to matrix format
+hm_genes <- hm_genes %>%
+  dplyr::select(-sd) %>%
+  dplyr::filter(!grepl("_dn$", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+  #apply(2, rescale)
+
+
+
+hm_cleaned <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        column_title = "cleaned (no ribo genes) genesets, z-score",
+                        #row_split = 5,
+                        column_title_gp =  gpar(cex = 1, fontsize = 16, fontface = "bold"),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "z-score")) 
+
+
+
+#hm <- draw(hm)
+#ori_col_order <- column_order(hm)
+#ori_row_order <- row_order(hm)
+
+```
+
+
+
+
+```{r, fig.width= 10, fig.asp = 1}
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -c(cell.id, curated_cluster)) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), sd = sd(val))
+
+hm_genes <- hm_genes %>%
+  dplyr::select(-sd) %>%
+  dplyr::filter(!grepl("_dn$", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  #scale()
+  apply(2, rescale)
+
+
+
+hm2_cleaned <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 0,
+                        column_names_centered = T,
+                        column_split = 5,
+                        column_title = "cleaned (no ribo genes) genesets, [0,1] score",
+                        #row_split = 5,
+                        column_title_gp =  gpar(cex = 1, fontsize = 16, fontface = "bold"),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "[0,1] score"))
+```
+
+
+```{r, fig.width= 10, fig.asp = 1}
+hm_cleaned 
+hm2_cleaned
+
+#hm <- draw(hm)
+#ori_col_order <- column_order(hm)
+#ori_row_order <- row_order(hm)
+
+```
+
+
+```{r}
+library(patchwork)
+
+
+grobs <- lapply(c(hm_cleaned, hm2_cleaned, hm_raw, hm2_raw), function(hm) grid.grabExpr(draw(hm)))
+
+pdf(file.path(manuscript_figures_path, "custom_genesets_hm.pdf"), width = 11, height = 10)
+do.call(grid.arrange, grobs)
+dev.off()
+
+```
+
+
+
+
+
+# MELD scores
+
+```{r, fig.width=10}
+
+results_dir <- "results/NK_analysis/phate_meld_output/"
+
+meld_files <- list.files(results_dir, full.names = F, pattern = "LLH.csv")
+
+base_name <- gsub("_NK_MELD_LLH\\.csv$", "", meld_files)
+
+meld_results <- tibble(files = meld_files, dir = results_dir) %>%
+  mutate(base_name = gsub("_NK_MELD_LLH\\.csv$", "", files)) %>%
+  mutate(results = purrr::map(here(dir, files), ~read_csv(.x) %>%
+                                pivot_longer(-index, values_to = "score", names_to = "comparison"))) %>%
+  unnest() %>%
+  dplyr::select(-c("files", "dir", "base_name")) %>%
+  dplyr::filter(comparison %in% c("MM", "BMMC")) %>%
+  dplyr::filter(!is.na(score)) %>%
+  mutate(comparison = paste0("MELD_", comparison)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = comparison, values_from = score) %>%
+  right_join(meta, by = c("index" = "cell.id"))
+
+
+
+
+p1 <- hex_plots(meld_results,
+              umap_settings[1],
+              umap_settings[2],
+              "MELD_BMMC",
+          facets = .~condition,
+              CI = 0.1,
+          divergent_scale = T) +
+      theme(legend.justification = c(1.1,-0.1),
+            legend.direction = "vertical",
+            aspect.ratio = 0.7,
+            legend.text = element_text(
+              angle = 0,
+              hjust = 1,
+              vjust = 0
+            ),
+      )
+
+p2 <- hex_plots(meld_results,
+              umap_settings[1],
+              umap_settings[2],
+              "MELD_MM",
+          facets = .~source,
+              CI = 0.1,
+          divergent_scale = T) +
+      theme(legend.justification = c(1.1,-0.1),
+            legend.direction = "vertical",
+            aspect.ratio = 0.7,
+            legend.text = element_text(
+              angle = 0,
+              hjust = 1,
+              vjust = 0
+            ),
+      )
+
+
+plot_grid(p1,p2, ncol = 1)
+
+ggsave(file.path(manuscript_figures_path, "MELD_UMAP.pdf"), width = 10, height = 7)
+
+
+p1 <- meld_results %>%
+  left_join(labels) %>%
+  ggplot(aes(reorder(cluster_label, as.numeric(curated_cluster)), MELD_BMMC)) +
+  geom_violin(aes(fill = reorder(cluster_label, as.numeric(curated_cluster)))) +
+  facet_grid(.~condition) +
+  geom_hline(yintercept = 0.5) +
+  theme_mrl() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.title = element_blank()) +
+  scale_fill_manual(values = palette)
+
+p2 <- meld_results %>%
+  left_join(labels) %>%
+  ggplot(aes(reorder(cluster_label, as.numeric(curated_cluster)), MELD_MM)) +
+  geom_violin(aes(fill = reorder(cluster_label, as.numeric(curated_cluster)))) +
+  facet_grid(.~source) +
+  geom_hline(yintercept = 0.5) +
+  theme_mrl() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "none") +
+  scale_fill_manual(values = palette)
+
+
+plot_grid(p1,p2, ncol = 1, axis = "bltr", align = "hv")
+ggsave(file.path(manuscript_figures_path, "MELD_violins.pdf"), width = 10, height = 7)
+```
+
+
+
+# trajectory
+
+## R slingshot analysis
+
+```{r}
+RuNK <- qs::qread("results/NK_analysis/trajectory_pseudotime/slingshot_pto.qs")
+
+source("src/helpers/slingshot_layout_helpers.R")
+
+sling_meta <- meta %>%
+  dplyr::select(cell.id, UMAP_1, UMAP_2, id, condition, source, curated_cluster) %>%
+  left_join(sling_cell_data(RuNK), by = c("cell.id" = "id"))
+```
+
+### Average pseudotime across clusters, ordered by lineages
+
+```{r}
+
+pseudotime_tree <- pseudotime_branching(RuNK, graphlayouts::layout_with_stress, "layout_only", offset = 1) +
+  theme_graph() +
+  theme(text = element_text(family = "Arial"), 
+        panel.border = element_rect(color = "black", fill = NA, linetype = "solid"),
+        axis.text.x = element_text(),
+        axis.ticks.x = element_line(),
+        axis.title.x = element_text(),
+        legend.title = element_blank()) +
+  labs(x = "pseudotime") +
+  scale_fill_manual(values = palette)
+
+pseudotime_tree
+```
+
+### Main branch
+
+```{r, fig.width=20, fig.asp= 0.5}
+sling_cell_data(RuNK) %>%
+  ggplot(aes(cluster, fill = grepl("1", lineage))) +
+  geom_bar(position = "fill") +
+  ggtitle("Proportion of cells associated with lineage 1 by distance to the principal curves")
+
+PT_hm <- sling_meta %>%
+  dplyr::filter(!cluster %in% c(6,8)) %>%
+  ggplot(aes(pseudotime, condition)) +
+  stat_density(aes(fill = after_stat(scaled)),
+               geom = "raster",
+               position = "identity") +
+  #stat_summary(geom = "point", fun = function(x) exp(mean(log(x)))) +
+  theme_mrl() +
+  theme(strip.text.y.left = element_text(angle = 0),
+        axis.title.y = element_blank(),
+        strip.placement = "outside",
+        legend.position = "none") +
+  scale_x_continuous(expand = expand_scale(), limits = c(15,50), oob = squish)
+  #scale_fill_viridis(trans = ggforce::power_trans(2)) +
+  
+
+
+PT_hm_tissue <- PT_hm + 
+  facet_grid(reorder(cluster, pseudotime)~ source, switch = "y") +
+  ggtitle("density of cells along pseudotime ranks for each cluster")
+PT_hm <- PT_hm + facet_grid(reorder(cluster, pseudotime)~ "overall", switch = "y")
+
+PT_hm <- plot_grid(PT_hm_tissue, PT_hm, nrow = 1,
+          align = "hv",
+          axis = "tblr",
+          rel_widths = c(2,1.2))
+```
+
+
+
+
+```{r}
+library(mgcv)
+pt_genes <- c(
+"GZMA",
+"B3GAT1",
+"GZMB",
+"FCGR3A",
+"PRF1",
+"OASL",
+#"KLRC2",
+"KLRK1",
+"NCR1",
+"CCL3",
+"CD69",
+"RELB",
+#"TCF7",
+"IL7R",
+"IL18R1",
+"SELL", 
+"NCAM1", 
+"GZMH", 
+"IFNGR1"
+)
+genes_to_plot <- seurat@assays$RNA@data[pt_genes,] %>% #marker_genes_to_plot
+  as.matrix() %>%
+  t() %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("cell.id") %>%
+  pivot_longer(-cell.id, names_to = "gene", values_to = "expr")
+
+
+sling_pt_genes <- sling_meta %>%
+  dplyr::filter(!cluster %in% c(6,8)) %>%
+  dplyr::select(cell.id, pseudotime) %>%
+  left_join(genes_to_plot) %>%
+  group_by(gene) %>%
+  nest() %>%
+  mutate(pred_grid = purrr::map(data, ~seq(
+                                      min(.x$pseudotime),
+                                      max(.x$pseudotime),
+                                      length.out = 1000
+                                    ))) %>%
+  mutate(smooth_mean = purrr::map2(data, pred_grid, ~ gam(expr ~ s(pseudotime, bs = "cs"),
+                                              data = .x) %>%
+                                    predict(newdata = data.frame(pseudotime = .y)) %>%
+                                    rescale())) %>%
+  dplyr::select(gene, pred_grid, smooth_mean) %>%
+  unnest()
+
+pdf(file.path(manuscript_figures_path, "pt_genes.pdf"), width = 11, height = 5)
+
+tidyHeatmap::heatmap(ungroup(sling_pt_genes),
+        gene,
+        pred_grid,
+        smooth_mean,
+        palette_value = colorRamp2(1:10/10, viridis(10)),
+        cluster_columns = FALSE,
+        column_title = NA)
+dev.off()
+```
+
+
+```{r}
+PT_MELD <- sling_meta %>%
+  dplyr::filter(!cluster %in% c(6,8)) %>%
+  left_join(meld_results %>% dplyr::select(cell.id = index, MELD_MM, MELD_BMMC)) %>%
+  ggplot(aes(pseudotime, MELD_MM)) +
+  stat_density2d(aes(fill = cluster), contour_var = "ndensity", geom = "polygon", alpha = 0.3, color = "black", bins = 4) +
+  stat_summary_xy(aes(group = cluster, label = cluster), geom = "label", .fun.x = "median", .fun.y = "median") +
+  theme_mrl() +
+  theme(legend.position = c(0,1), legend.justification = c(0,1)) +
+  scale_fill_manual(values = setNames(palette[1:8], 1:8)) +
+  guides(fill = guide_legend(title = "lineage 1 clusters", override.aes = list(alpha = 0.7)))
+
+
+```
+
+
+
+
+```{r, fig.width=10}
+PT_distro <- sling_meta %>%
+  dplyr::filter(!cluster %in% c(6,8)) %>%
+  ggplot(aes(pseudotime)) +
+  geom_density(aes(fill = condition), alpha = 0.5) +
+  facet_grid(source~.) +
+  theme_mrl() +
+  theme(legend.position = c(0,1), legend.justification = c(0,1)) +
+  scale_fill_jco()
+
+
+sling_meta %>%
+  dplyr::filter(!cluster %in% c(6,8)) %>%
+  ggplot(aes(condition,pseudotime, group = id, color = condition)) +
+  stat_summary(position = position_dodge(width = 0.1), geom = "label", aes(label = id)) +
+  facet_grid(source~cluster) +
+  theme_mrl()
+```
+
+
+### Visualize the lineages in low dim space
+
+```{r, fig.show='hide'}
+PT_UMAP <- slingLineages(RuNK) %>%
+  enframe("lineage", "cluster") %>%
+  unnest() %>%
+  mutate(code = T) %>%
+  pivot_wider(names_from = "lineage",
+              values_from = "code",
+              values_fill = F) %>%
+  right_join(sling_meta) %>%
+  pivot_longer(matches("Lineage[0-9]+"),
+               names_to = "Lineage",
+               values_to = "belong") %>%
+  dplyr::filter(belong) %>%
+  group_by(Lineage) %>%
+  mutate(groups = ntile(pseudotime, 10)) %>%
+  group_by(Lineage, groups) %>%
+  summarize(
+    pseudotime = median(pseudotime),
+    UMAP_1 = median(UMAP_1),
+    UMAP_2 = median(UMAP_2)
+  ) %>%
+  group_by(Lineage) %>%
+  mutate(pseudotime = rank(pseudotime)) %>%
+  nest() %>%
+  mutate(smoothed_coord = purrr::map(data, ~ {
+    plot.new()
+    list(x = .x$UMAP_1, y = .x$UMAP_2) %>%
+      xspline(shape = -0.5, draw = F) %>%
+      data.frame()
+  })) %>%
+  dplyr::select(-data) %>%
+  unnest() %>%
+  dplyr::rename(UMAP_1 = x, UMAP_2 = y) %>%
+  group_by(Lineage) %>%
+  mutate(group = ntile(n = 4)) %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  stat_summary_hex(
+    data = sling_meta,
+    aes(z = pseudotime, color = after_scale(fill)),
+    bins = 100
+  ) +
+  #scale_fill_manual(values = palette) +
+  geom_path(aes(group = paste(Lineage, group)), 
+            size = 3,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed"),
+    show.legend = F) +
+  geom_path(
+    aes(color = Lineage, group = paste(Lineage, group)),
+    size = 1,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed")
+  ) +
+  theme_void() +
+  theme(panel.border = element_rect(
+          color = "black",
+          linewidth = 1,
+          fill = NA,
+          linetype = "solid"
+        ), plot.margin = unit(c(0.05,0.05,0.05,0.05), "npc"),
+        aspect.ratio = 0.7) +
+  scale_fill_viridis_c(limits = c(15,50), oob = squish) +
+  guides(color = guide_legend(title = element_blank(), override.aes = list(fill = NA)),
+         fill = guide_colorbar(title = "pseudotime")) +
+  scale_color_manual(values = c("lightblue", "darkred", "orchid4"))
+  
+
+
+
+
+  
+```
+
+
+```{r}
+
+# combine plots for paper figure
+
+
+PT_combined <- plot_grid(plot_grid(PT_UMAP, pseudotime_tree, nrow = 1), 
+                         PT_hm, 
+                         plot_grid(PT_MELD, PT_distro, ggplot(), nrow = 1),
+                         ncol = 1)
+PT_combined
+
+extrafont::loadfonts()
+
+ggsave(file.path(manuscript_figures_path, "pseudotime_results.pdf"),  width = 20, height = 14)
+
+
+```
+
+
+### alternate cluster 8 start
+
+
+```{r, fig.show='hide'}
+RuNK <- qread("results/NK_analysis/trajectory_pseudotime/slingshot_pto_c8.qs")
+
+sling_meta <- meta %>%
+  dplyr::select(cell.id, UMAP_1, UMAP_2, id, condition, source, curated_cluster) %>%
+  left_join(sling_cell_data(RuNK), by = c("cell.id" = "id"))
+
+
+pseudotime_tree <- pseudotime_branching(RuNK, graphlayouts::layout_with_stress, "layout_only", offset = 1) +
+  theme_graph() +
+  theme(text = element_text(family = "Arial"), 
+        panel.border = element_rect(color = "black", fill = NA, linetype = "solid"),
+        axis.text.x = element_text(),
+        axis.ticks.x = element_line(),
+        axis.title.x = element_text(),
+        legend.title = element_blank()) +
+  labs(x = "pseudotime") +
+  scale_fill_manual(values = palette)
+
+
+
+PT_UMAP <- slingLineages(RuNK) %>%
+  enframe("lineage", "cluster") %>%
+  unnest() %>%
+  mutate(code = T) %>%
+  pivot_wider(names_from = "lineage",
+              values_from = "code",
+              values_fill = F) %>%
+  right_join(sling_meta) %>%
+  pivot_longer(matches("Lineage[0-9]+"),
+               names_to = "Lineage",
+               values_to = "belong") %>%
+  dplyr::filter(belong) %>%
+  group_by(Lineage) %>%
+  mutate(groups = ntile(pseudotime, 10)) %>%
+  group_by(Lineage, groups) %>%
+  summarize(
+    pseudotime = median(pseudotime),
+    UMAP_1 = median(UMAP_1),
+    UMAP_2 = median(UMAP_2)
+  ) %>%
+  group_by(Lineage) %>%
+  mutate(pseudotime = rank(pseudotime)) %>%
+  nest() %>%
+  mutate(smoothed_coord = purrr::map(data, ~ {
+    plot.new()
+    list(x = .x$UMAP_1, y = .x$UMAP_2) %>%
+      xspline(shape = -0.5, draw = F) %>%
+      data.frame()
+  })) %>%
+  dplyr::select(-data) %>%
+  unnest() %>%
+  dplyr::rename(UMAP_1 = x, UMAP_2 = y) %>%
+  group_by(Lineage) %>%
+  mutate(group = ntile(n = 4)) %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  stat_summary_hex(
+    data = sling_meta,
+    aes(z = pseudotime, color = after_scale(fill)),
+    bins = 100
+  ) +
+  #scale_fill_manual(values = palette) +
+  geom_path(aes(group = paste(Lineage, group)), 
+            size = 3,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed"),
+    show.legend = F) +
+  geom_path(
+    aes(color = Lineage, group = paste(Lineage, group)),
+    size = 1,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed")
+  ) +
+  theme_void() +
+  theme(panel.border = element_rect(
+          color = "black",
+          linewidth = 1,
+          fill = NA,
+          linetype = "solid"
+        ), plot.margin = unit(c(0.05,0.05,0.05,0.05), "npc"),
+        aspect.ratio = 0.7) +
+  scale_fill_viridis_c(limits = c(15,50), oob = squish) +
+  guides(color = guide_legend(title = element_blank(), override.aes = list(fill = NA)),
+         fill = guide_colorbar(title = "pseudotime")) +
+  scale_color_manual(values = c("lightblue", "darkred", "orchid4"))
+```
+
+
+```{r}
+plot_grid(pseudotime_tree, PT_UMAP, ncol = 1)
+
+extrafont::loadfonts()
+ggsave(file.path(manuscript_figures_path, "slingshot_C8_start.pdf"),  width = 10, height = 14)
+```
+
+
+
+### alternate pbmc vs bmmc separation
+
+
+```{r, fig.asp=1.5, fig.show='hide'}
+RuNK <- qread("results/NK_analysis/trajectory_pseudotime/slingshot_pto_c5_pbmc.qs")
+
+sling_meta <- meta %>%
+  dplyr::select(cell.id, UMAP_1, UMAP_2, id, condition, source, curated_cluster) %>%
+  left_join(sling_cell_data(RuNK), by = c("cell.id" = "id"))
+
+
+pseudotime_tree <- pseudotime_branching(RuNK, graphlayouts::layout_with_stress, "layout_only", offset = 1) +
+  theme_graph() +
+  theme(text = element_text(family = "Arial"), 
+        panel.border = element_rect(color = "black", fill = NA, linetype = "solid"),
+        axis.text.x = element_text(),
+        axis.ticks.x = element_line(),
+        axis.title.x = element_text(),
+        legend.title = element_blank()) +
+  labs(x = "pseudotime") +
+  scale_fill_manual(values = palette)
+
+
+
+PT_UMAP <- slingLineages(RuNK) %>%
+  enframe("lineage", "cluster") %>%
+  unnest() %>%
+  mutate(code = T) %>%
+  pivot_wider(names_from = "lineage",
+              values_from = "code",
+              values_fill = F) %>%
+  right_join(sling_meta) %>%
+  pivot_longer(matches("Lineage[0-9]+"),
+               names_to = "Lineage",
+               values_to = "belong") %>%
+  dplyr::filter(belong) %>%
+  group_by(Lineage) %>%
+  mutate(groups = ntile(pseudotime, 10)) %>%
+  group_by(Lineage, groups) %>%
+  summarize(
+    pseudotime = median(pseudotime),
+    UMAP_1 = median(UMAP_1),
+    UMAP_2 = median(UMAP_2)
+  ) %>%
+  group_by(Lineage) %>%
+  mutate(pseudotime = rank(pseudotime)) %>%
+  nest() %>%
+  mutate(smoothed_coord = purrr::map(data, ~ {
+    plot.new()
+    list(x = .x$UMAP_1, y = .x$UMAP_2) %>%
+      xspline(shape = -0.5, draw = F) %>%
+      data.frame()
+  })) %>%
+  dplyr::select(-data) %>%
+  unnest() %>%
+  dplyr::rename(UMAP_1 = x, UMAP_2 = y) %>%
+  group_by(Lineage) %>%
+  mutate(group = ntile(n = 4)) %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  stat_summary_hex(
+    data = sling_meta,
+    aes(z = pseudotime, color = after_scale(fill)),
+    bins = 100
+  ) +
+  #scale_fill_manual(values = palette) +
+  geom_path(aes(group = paste(Lineage, group)), 
+            size = 3,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed"),
+    show.legend = F) +
+  geom_path(
+    aes(color = Lineage, group = paste(Lineage, group)),
+    size = 1,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed")
+  ) +
+  theme_void() +
+  theme(panel.border = element_rect(
+          color = "black",
+          linewidth = 1,
+          fill = NA,
+          linetype = "solid"
+        ), plot.margin = unit(c(0.05,0.05,0.05,0.05), "npc"),
+        aspect.ratio = 0.7) +
+  scale_fill_viridis_c(limits = c(15,50), oob = squish) +
+  guides(color = guide_legend(title = element_blank(), override.aes = list(fill = NA)),
+         fill = guide_colorbar(title = "pseudotime")) +
+  scale_color_manual(values = c("lightblue", "darkred", "orchid4"))
+```
+
+
+```{r, fig.asp=1.5}
+plot_grid(pseudotime_tree + ggtitle("PBMC only"), PT_UMAP, ncol = 1)
+
+extrafont::loadfonts()
+ggsave(file.path(manuscript_figures_path, "slingshot_pbmc.pdf"),  width = 10, height = 14)
+```
+
+
+```{r, fig.asp=1.5, fig.show='hide'}
+RuNK <- qread("results/NK_analysis/trajectory_pseudotime/slingshot_pto_c5_bmmc.qs")
+
+sling_meta <- meta %>%
+  dplyr::select(cell.id, UMAP_1, UMAP_2, id, condition, source, curated_cluster) %>%
+  left_join(sling_cell_data(RuNK), by = c("cell.id" = "id"))
+
+
+pseudotime_tree <- pseudotime_branching(RuNK, graphlayouts::layout_with_stress, "layout_only", offset = 1) +
+  theme_graph() +
+  theme(text = element_text(family = "Arial"), 
+        panel.border = element_rect(color = "black", fill = NA, linetype = "solid"),
+        axis.text.x = element_text(),
+        axis.ticks.x = element_line(),
+        axis.title.x = element_text(),
+        legend.title = element_blank()) +
+  labs(x = "pseudotime") +
+  scale_fill_manual(values = palette)
+
+
+
+PT_UMAP <- slingLineages(RuNK) %>%
+  enframe("lineage", "cluster") %>%
+  unnest() %>%
+  mutate(code = T) %>%
+  pivot_wider(names_from = "lineage",
+              values_from = "code",
+              values_fill = F) %>%
+  right_join(sling_meta) %>%
+  pivot_longer(matches("Lineage[0-9]+"),
+               names_to = "Lineage",
+               values_to = "belong") %>%
+  dplyr::filter(belong) %>%
+  group_by(Lineage) %>%
+  mutate(groups = ntile(pseudotime, 10)) %>%
+  group_by(Lineage, groups) %>%
+  summarize(
+    pseudotime = median(pseudotime),
+    UMAP_1 = median(UMAP_1),
+    UMAP_2 = median(UMAP_2)
+  ) %>%
+  group_by(Lineage) %>%
+  mutate(pseudotime = rank(pseudotime)) %>%
+  nest() %>%
+  mutate(smoothed_coord = purrr::map(data, ~ {
+    plot.new()
+    list(x = .x$UMAP_1, y = .x$UMAP_2) %>%
+      xspline(shape = -0.5, draw = F) %>%
+      data.frame()
+  })) %>%
+  dplyr::select(-data) %>%
+  unnest() %>%
+  dplyr::rename(UMAP_1 = x, UMAP_2 = y) %>%
+  group_by(Lineage) %>%
+  mutate(group = ntile(n = 4)) %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  stat_summary_hex(
+    data = sling_meta,
+    aes(z = pseudotime, color = after_scale(fill)),
+    bins = 100
+  ) +
+  #scale_fill_manual(values = palette) +
+  geom_path(aes(group = paste(Lineage, group)), 
+            size = 3,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed"),
+    show.legend = F) +
+  geom_path(
+    aes(color = Lineage, group = paste(Lineage, group)),
+    size = 1,
+    arrow = arrow(angle = 30, length = unit(0.2, "inches"), type = "closed")
+  ) +
+  theme_void() +
+  theme(panel.border = element_rect(
+          color = "black",
+          linewidth = 1,
+          fill = NA,
+          linetype = "solid"
+        ), plot.margin = unit(c(0.05,0.05,0.05,0.05), "npc"),
+        aspect.ratio = 0.7) +
+  scale_fill_viridis_c(limits = c(15,50), oob = squish) +
+  guides(color = guide_legend(title = element_blank(), override.aes = list(fill = NA)),
+         fill = guide_colorbar(title = "pseudotime")) +
+  scale_color_manual(values = c("lightblue", "darkred", "orchid4"))
+```
+
+
+```{r, fig.asp=1.5}
+plot_grid(pseudotime_tree + ggtitle("BMMC only"), PT_UMAP, ncol = 1)
+
+extrafont::loadfonts()
+ggsave(file.path(manuscript_figures_path, "slingshot_bmmc.pdf"),  width = 10, height = 14)
+```
+
+
+## Exploration of cluster 5 outliers: activated CD56 bright NK cells
+
+```{r}
+sling_cell_data(RuNK) %>%
+  dplyr::rename(cell.id = id) %>%
+  left_join(meta) %>%
+  mutate(pseudotime = rank(pseudotime)) %>%
+  dplyr::filter(curated_cluster == 5) %>%
+  ggplot(aes(curated_cluster, pseudotime, fill = id)) +
+  geom_violin(scale = "width", adjust = 1/2) +
+  facet_grid(source ~ condition)
+
+
+sling_cell_data(RuNK) %>%
+  dplyr::rename(cell.id = id) %>%
+  left_join(meta) %>%
+  ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(aes(color = rank(pseudotime) > 20000 & curated_cluster == 5), size = 0.5, alpha = 0.5) +
+  geom_density2d() +
+  theme_umap() +
+  facet_grid(source ~ condition)
+
+sling_cell_data(RuNK) %>%
+  dplyr::rename(cell.id = id) %>%
+  left_join(meta) %>%
+  mutate(activated_bright = rank(pseudotime) > 20000 & curated_cluster == 5) %>%
+  dplyr::filter(curated_cluster == 5) %>%
+  group_by(condition, source,id, activated_bright) %>%
+  summarize(count = n()) %>%
+  group_by(condition, source) %>%
+  mutate(freq = count / sum(count)) %>%
+  dplyr::select(-count) %>%
+  pivot_wider(names_from = activated_bright, values_from =freq, values_fill = 0) %>%
+  dplyr::rename(activated_bright = `TRUE`) %>%
+  ggplot(aes(condition, activated_bright*100)) +
+  geom_boxplot() +
+  geom_jitter(alpha = 0.5) +
+  facet_grid(.~source) +
+  #scale_y_log10() +
+  ggsignif::geom_signif(comparisons = list(c("HD", "MM"))) +
+  theme_mrl()
+
+```
+
+there is a small subset of CD56 bright NK cells with high NFkB activation and dowmodulation of CD56 bright population markers:
+
+
+
+```{r}
+genes_to_plot <- seurat@assays$RNA@data[curated_cluster_markers,] %>% #marker_genes_to_plot
+  as.matrix() %>%
+  t() %>%
+  as.data.frame() %>%
+  dplyr::rename_with(~paste0("gene_",.)) %>%
+  tibble::rownames_to_column("cell.id")
+```
+
+
+```{r, fig.width= 4, fig.asp = 4}
+hm_genes <- sling_cell_data(RuNK) %>%
+  dplyr::rename(cell.id = id) %>%
+  left_join(meta) %>%
+  mutate(curated_cluster = ifelse(rank(pseudotime) > 20000 & curated_cluster == 5, 
+                                  "5_act", 
+                                  curated_cluster)) %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -!matches("^gene_")) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), pct = sum(val > 0) / n() * 100)
+
+pct_genes <- hm_genes %>%
+  dplyr::select(-avg) %>%
+  mutate(feat = gsub("gene_", "", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "pct") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+
+hm_genes <- hm_genes %>%
+  dplyr::select(-pct) %>%
+  mutate(feat = gsub("gene_", "", feat)) %>%
+  pivot_wider(names_from = "feat",values_from = "avg") %>%
+  tibble::column_to_rownames("curated_cluster") %>%
+  as.matrix() %>%
+  scale()
+
+
+
+hm <- ComplexHeatmap::Heatmap(t(hm_genes),
+                        col = colorRamp2(quantile(hm_genes, c(0.025,0.5,0.975)),
+                                         c("royalblue", "grey", "red4")),
+                        row_names_gp = gpar(fontsize = 12, fontface = "bold"),
+                        column_names_gp = gpar(fontsize = 16, fontface = "bold"),
+                        column_names_rot = 45,
+                        column_names_centered = F,
+                        column_split = 5,
+                        row_split = 5,
+                        column_title_gp = gpar(cex = 0, fontsize = 0),
+                        row_title_gp = gpar(cex = 0, fontsize = 0),
+                        heatmap_legend_param = list(title = "z-score")) 
+
+
+
+hm <- draw(hm)
+ori_col_order <- column_order(hm)
+ori_row_order <- row_order(hm)
+
+```
+
+
+# GSEA from geneset databases
+
+
+## main enriched genesets
+
+
+```{r}
+gsea_results <- qread("results/NK_analysis/clustering_typing/gsea_results.qs")
+
+comparison_pairs <- vapply(gsea_results, function(x) x[["pair"]], "character")
+
+names(gsea_results) <- comparison_pairs
+
+
+gsea_results <- gsea_results[c("Cl_3vs1", "Cl_7vs4")] %>%
+  enframe("comparison", "results") 
+
+
+gsea_results <- gsea_results %>% 
+  mutate(db = purrr::map(results, names)) %>% 
+  unnest() %>%
+  dplyr::filter(! db %in% c("ranks", "pair")) %>%
+  unnest(results)
+```
+
+
+### KEGG
+
+```{r}
+signif_gs <- gsea_results %>%
+  dplyr::filter(padj < 0.05 & db == "kegg") %>%
+  mutate(sign = ifelse(NES > 0, "up", "dn"),
+         comparison = str_replace(comparison, "Cl_", "cluster "),
+         pathway = str_replace(pathway, "KEGG_", "")) %>%
+  ggplot(aes(NES, reorder(pathway, NES))) +
+  geom_point(aes(size = -log10(padj), color = sign)) +
+  geom_text(aes(label = pathway, hjust = ifelse(NES > 0, 1.1, -0.1))) +
+  facet_wrap(comparison~db, scales = "free") +
+  theme_mrl() +
+  theme(aspect.ratio = 0.8,
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position = c(1,0),
+        legend.justification = c(1,0)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue")) +
+  geom_vline(xintercept = 0, linetype = "dashed")
+
+
+
+volcano_gs <- gsea_results %>%
+  dplyr::filter(db == "kegg") %>%
+  mutate(sign = ifelse(padj >= 0.05, "n.s.", ifelse(NES > 0, "up", "dn")),
+         comparison = str_replace(comparison, "Cl_", "cluster "),
+         pathway = str_replace(pathway, "KEGG_", "") %>% str_replace_all("_", " ") %>% str_wrap(15)) %>%
+  mutate(annotations = ifelse(rank(-abs(NES)) < 20 & padj < 0.05, pathway, ""), .by = comparison) %>%
+  ggplot(aes(NES, -log10(pval), color = sign)) +
+  geom_point() +
+  geom_label_repel(aes(label = annotations),
+                   force = 10,
+                   xlim = c(-1.5,1.5),
+                   show.legend = FALSE) +
+  facet_wrap(comparison~db, scales = "free") +
+  theme_mrl() +
+  theme(aspect.ratio = 1.2,
+        legend.position = c(1,0),
+        legend.justification = c(1,0)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue", "n.s." = "grey")) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  guides(color = guide_legend(override.aes = list(geom = "point")))
+
+
+comparison_gs <- gsea_results %>%
+  dplyr::filter(db == "kegg") %>%
+  group_by(pathway) %>%
+  #dplyr::filter(sum(padj < 0.05) > 0) %>%
+  ungroup() %>%
+  dplyr::select(pathway, comparison, NES, padj) %>%
+  pivot_wider(names_from = comparison, values_from = c(NES, padj)) %>%
+  mutate(common = ifelse(padj_Cl_3vs1 < 0.05 & padj_Cl_7vs4 < 0.05,
+                         ifelse(NES_Cl_3vs1 > 0 & NES_Cl_7vs4 >0, "up", "dn"),
+                         "n.s."),
+         pathway = str_replace(pathway, "KEGG_", "") %>% str_replace_all("_", " ") %>% str_wrap(15)) %>%
+  mutate(annotations = ifelse(common == "n.s.", "",  pathway)) %>%
+  ggplot(aes(NES_Cl_3vs1, NES_Cl_7vs4, color = common)) +
+  geom_point()+
+  geom_label_repel(aes(label = annotations),
+                   force = 50,
+                   min.segment.length = 0,
+                   max.overlaps = 100,
+                   show.legend = FALSE) +
+  theme_mrl() +
+  theme(aspect.ratio = 1.2,
+        legend.position = c(0,1),
+        legend.justification = c(0,1)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue", "n.s." = "grey")) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  guides(color = guide_legend(override.aes = list(geom = "point"))) +
+  scale_x_continuous(expand = expand_scale(1)) +
+  scale_y_continuous(expand = expand_scale(1))
+  
+
+plot_grid(signif_gs, plot_grid(volcano_gs, comparison_gs, nrow = 1), ncol = 1)
+
+ggsave(file.path(manuscript_figures_path, "gsea_pair_results.pdf"), width = 20, height = 14)
+
+```
+
+
+### Reactome
+
+
+```{r, fig.asp = 2}
+
+gs_db<-"react"
+signif_gs <- gsea_results %>%
+  dplyr::filter(padj < 0.05 & db == gs_db) %>%
+  mutate(sign = ifelse(NES > 0, "up", "dn"),
+         comparison = str_replace(comparison, "Cl_", "cluster "),
+         pathway = str_replace(pathway, "REACTOME_", "") %>% str_replace_all("_", " ") %>% str_wrap(60)) %>%
+  ggplot(aes(y = reorder(pathway, NES))) +
+  geom_point(aes(NES, size = -log10(padj), color = sign)) +
+  geom_text(aes(NES*0.95, label = pathway, hjust = ifelse(NES > 0, 1, -0))) +
+  facet_wrap(comparison~db, scales = "free") +
+  theme_mrl() +
+  theme(aspect.ratio = 3,
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position = c(1,0),
+        legend.justification = c(1,0)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue")) +
+  geom_vline(xintercept = 0, linetype = "dashed")
+
+
+
+volcano_gs <- gsea_results %>%
+  dplyr::filter(db == gs_db) %>%
+  mutate(sign = ifelse(padj >= 0.05, "n.s.", ifelse(NES > 0, "up", "dn")),
+         comparison = str_replace(comparison, "Cl_", "cluster "),
+         pathway = str_replace(pathway, "REACTOME_", "") %>% str_replace_all("_", " ") %>% str_wrap(15)) %>%
+  mutate(annotations = ifelse(rank(-abs(NES)) < 20 & padj < 0.05, pathway, ""), .by = comparison) %>%
+  ggplot(aes(NES, -log10(pval), color = sign)) +
+  geom_point() +
+  geom_label_repel(aes(label = annotations),
+                   force = 10,
+                   xlim = c(-1.5,1.5),
+                   show.legend = FALSE) +
+  facet_wrap(comparison~db, scales = "free") +
+  theme_mrl() +
+  theme(aspect.ratio = 1.2,
+        legend.position = c(1,0),
+        legend.justification = c(1,0)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue", "n.s." = "grey")) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  guides(color = guide_legend(override.aes = list(geom = "point")))
+
+
+comparison_gs <- gsea_results %>%
+  dplyr::filter(db == gs_db) %>%
+  group_by(pathway) %>%
+  #dplyr::filter(sum(padj < 0.05) > 0) %>%
+  ungroup() %>%
+  dplyr::select(pathway, comparison, NES, padj) %>%
+  pivot_wider(names_from = comparison, values_from = c(NES, padj)) %>%
+  mutate(common = ifelse(padj_Cl_3vs1 < 0.05 & padj_Cl_7vs4 < 0.05,
+                         ifelse(NES_Cl_3vs1 > 0 & NES_Cl_7vs4 >0, "up", "dn"),
+                         "n.s."),
+         pathway = str_replace(pathway, "REACTOME_", "") %>% str_replace_all("_", " ") %>% str_wrap(15)) %>%
+  mutate(annotations = ifelse(common == "n.s.", "",  pathway)) %>%
+  ggplot(aes(NES_Cl_3vs1, NES_Cl_7vs4, color = common)) +
+  geom_point()+
+  geom_label_repel(aes(label = annotations),
+                   force = 50,
+                   min.segment.length = 0,
+                   max.overlaps = 200,
+                   show.legend = FALSE) +
+  theme_mrl() +
+  theme(aspect.ratio = 1.2,
+        legend.position = c(0,1),
+        legend.justification = c(0,1)) +
+  scale_color_manual(values = c("up" = "darkred", dn = "royalblue", "n.s." = "grey")) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  guides(color = guide_legend(override.aes = list(geom = "point"))) +
+  scale_x_continuous(expand = expand_scale(1)) +
+  scale_y_continuous(expand = expand_scale(1))
+  
+
+plot_grid(signif_gs, plot_grid(volcano_gs, comparison_gs, nrow = 1), ncol = 1, rel_heights = c(2,1))
+
+ggsave(file.path(manuscript_figures_path, "gsea_pair_results_reactome.pdf"), width = 20, height = 45)
+
+```
+
+
+## Leading genes visualization and scoring
+
+In this section, plots are saved directly as pdf in the `figs/manuscript` folder.
+
+### leading edge genes for KEGG
+
+
+```{r}
+
+
+
+genes_to_plot <- gsea_results %>%
+  dplyr::filter(padj < 0.05 & db == "kegg") %>%
+  dplyr::select(leadingEdge) %>%
+  unnest() %>%
+  pull(leadingEdge) %>%
+  unique()
+
+
+genes_to_plot <- seurat@assays$RNA@data[genes_to_plot,] %>% #marker_genes_to_plot
+  as.matrix() %>%
+  t() %>%
+  as.data.frame() %>%
+  dplyr::rename_with(~paste0("gene_",.)) %>%
+  tibble::rownames_to_column("cell.id")
+
+# summarise to cluster level
+hm_genes <- meta %>%
+  dplyr::select(cell.id, curated_cluster) %>%
+  left_join(genes_to_plot) %>%
+  gather("feat", "val",  -c(cell.id, curated_cluster)) %>%
+  group_by(feat, curated_cluster) %>%
+  summarize(avg = mean(val), sd = sd(val))
+
+
+```
+
+
+### Leading edge genes heatmaps per geneset
+
+```{r}
+
+
+le_sets <- gsea_results %>%
+  dplyr::filter(padj < 0.05 & db == "kegg") %>%
+  dplyr::select(pathway, leadingEdge) %>%
+  group_by(pathway) %>%
+  summarize(leadingEdge = list(leadingEdge)) %>%
+  mutate(leadingEdge = purrr::map(leadingEdge, ~unique(do.call(c, .)))) %>%
+  deframe()
+
+
+grobs_cluster <- lapply(names(le_sets), function(le) {
+  
+  hm_genes %>%
+    ungroup() %>%
+    mutate(feat = str_replace(feat, "gene_", "")) %>%
+    dplyr::filter(feat %in% le_sets[[le]]) %>%
+    tidyHeatmap::heatmap(
+      feat,
+      curated_cluster,
+      avg,
+      scale = "row",
+      col = colorRamp2(c(-2, 0, 2),
+                       c("royalblue", "grey", "red4")),
+      cluster_columns = cl_dend,
+      column_split = 5,
+      column_title = gsub("^KEGG_","",le),
+      column_title_gp = gpar(fontsize = 10),
+      row_title = NA,
+      row_names_gp = gpar(fontsize = 6, fontface = "bold"),
+      column_names_gp = gpar(fontsize = 12, fontface = "bold"),
+      column_names_rot = 45,
+      column_names_centered = F,
+      heatmap_legend_param = list(title = "z-score")
+    ) %>%
+    as_ComplexHeatmap() 
+  
+  
+  
+})
+
+names(grobs_cluster) <- names(le_sets)
+
+pdf(file.path(manuscript_figures_path, "leadingEdge_hm.pdf"), width = 30, height = 30)
+grid.arrange(arrangeGrob(grobs = lapply(grobs_cluster, function(x) grid.grabExpr(draw(x))),
+                         nrow = 4, ncol = 7))
+dev.off()
+
+```
+
+
+### per cell score on leading edges genes
+
+Calculate per cell score with permutations and then summarise at sample level for heatmap of HC vs MM
+
+```{r}
+
+gs_results <- AddModuleScore(seurat, le_sets, name = paste0(names(le_sets), "___GS"))@meta.data %>%
+  as.data.frame() %>%
+  dplyr::select(matches("___GS[0-9]+$")) 
+
+
+if(identical(meta$cell.id, rownames(gs_results))) {
+  
+  groupings <- meta %>%
+  dplyr::select(condition, source, id)
+
+  gs_results <- aggregate(gs_results, groupings, "mean")
+  
+}
+
+
+
+# per patient
+
+kegg_hm <- gs_results %>%
+  dplyr::rename_with( ~ gsub("^KEGG_|___GS[0-9]+$", "", .)) %>%
+  pivot_longer(-c(condition, source, id),
+               values_to = "score",
+               names_to = "pathway") %>%
+  group_by(source, pathway) %>%
+  mutate(score = rescale(score)) %>%
+  ungroup() %>%
+  group_by(source) %>%
+  nest() %>%
+  mutate(hm = purrr::map2(
+    data,
+    source,
+    ~ heatmap(
+      .x,
+      pathway,
+      id,
+      score,
+      #scale = "row",
+      column_title = .y
+    ) %>% add_tile(condition)
+  )) %>%
+  pull(hm)
+
+
+
+pdf(file.path(manuscript_figures_path, "patient_hm_kegg.pdf"), width = 30, height = 15)
+lapply(kegg_hm, function(hm) hm %>%
+    as_ComplexHeatmap() %>%
+    draw(heatmap_legend_side = "left", annotation_legend_side = "left") %>%
+    grid.grabExpr()) %>%
+    arrangeGrob(grobs = ., nrow = 1, ncol = 2) %>%
+    grid.arrange()
+dev.off()
+
+
+
+
+# disease level summary
+
+kegg_hm <- gs_results %>%
+  dplyr::rename_with( ~ gsub("^KEGG_|___GS[0-9]+$", "", .)) %>%
+  pivot_longer(-c(condition, source, id),
+               values_to = "score",
+               names_to = "pathway") %>%
+  group_by(pathway) %>%
+  mutate(score = scale(score)) %>%
+  ungroup() %>%
+  group_by(source, condition, pathway) %>%
+  summarise(score = mean(score)) %>%
+  ungroup() %>%
+  mutate(condition = paste(source, condition)) %>%
+  group_by(source) %>%
+  heatmap(pathway,
+          condition,
+          score,
+          col = colorRamp2(c(-1, 0, 1),
+                       c("royalblue", "grey", "red4")))
+
+
+
+pdf(file.path(manuscript_figures_path, "disease_hm_kegg.pdf"), width = 10, height = 10)
+kegg_hm %>%
+    as_ComplexHeatmap() %>%
+    draw(heatmap_legend_side = "left", annotation_legend_side = "left") %>%
+    grid.grabExpr() %>%
+    arrangeGrob(nrow = 1, ncol = 2) %>%
+    grid.arrange()
+dev.off()
+
+```
+
+
+
+
+```{r}
+
+
+genes_to_plot_disease <- genes_to_plot %>%
+  dplyr::rename_with(~gsub("^gene_","", .)) %>%
+  tibble::column_to_rownames("cell.id")
+
+if(identical(meta$cell.id, rownames(genes_to_plot_disease))) {
+  
+  groupings <- meta %>%
+  dplyr::select(condition, source, id)
+
+  genes_to_plot_disease <- aggregate(genes_to_plot_disease, groupings, "mean")
+  
+}
+
+genes_to_plot_disease <- genes_to_plot_disease %>%
+  pivot_longer(-c(condition, source, id),
+               values_to = "expr",
+               names_to = "gene") %>%
+  group_by(gene) %>%
+  mutate(expr = scale(expr)) %>%
+  ungroup() %>%
+  group_by(source, condition, gene) %>%
+  summarise(expr = mean(expr)) %>%
+  ungroup() %>%
+  mutate(condition = paste(source, condition))
+
+
+grobs <- lapply(names(le_sets), function(le) {
+  
+  hm <- genes_to_plot_disease %>%
+    ungroup() %>%
+    dplyr::filter(gene %in% le_sets[[le]]) %>%
+    group_by(source) %>%
+    tidyHeatmap::heatmap(
+      gene,
+      condition,
+      expr,
+      col = colorRamp2(c(-1, 0, 1),
+                       c("royalblue", "grey", "red4")),
+      cluster_columns = FALSE,
+      column_title = gsub("^KEGG_","",le),
+      column_title_gp = gpar(fontsize = 0),
+      row_title = NA,
+      row_names_gp = gpar(fontsize = 6, fontface = "bold"),
+      column_names_gp = gpar(fontsize = 12, fontface = "bold"),
+      column_names_rot = 45,
+      column_names_centered = F
+    ) %>%
+    as_ComplexHeatmap() 
+  
+  #cat("test")
+  
+    draw(grobs_cluster[[le]] + hm) %>%
+    grid.grabExpr()
+  
+  
+  
+})
+
+
+pdf(file.path(manuscript_figures_path, "disease_leadingEdge_hm.pdf"), width = 30, height = 30)
+grid.arrange(arrangeGrob(grobs = grobs, nrow = 4, ncol = 7))
+dev.off()
+
+```
+
+# Table outputs
+
+Generate excel results table for the GSEA analysis:
+
+```{r}
+
+
+library(openxlsx)
+
+xl_tables <- gsea_results %>%
+  arrange(NES) %>%
+  dplyr::filter(db %in% c("kegg", "react")) %>%
+  unite("sheet", comparison, db) %>%
+  group_by(sheet) %>%
+  nest() %>%
+  deframe() 
+
+xl_tables[["common_pathways"]] <- gsea_results %>%
+  dplyr::filter(db %in% c("kegg", "react")) %>%
+  arrange(NES) %>%
+  group_by(pathway) %>%
+  dplyr::filter(sum(padj < 0.05) > 0) %>%
+  ungroup() %>%
+  dplyr::select(db, pathway) %>%
+  distinct() %>%
+  group_by(db) %>%
+  mutate(rank = rank(pathway)) %>%
+  pivot_wider(names_from = db, values_from = pathway) %>%
+  arrange(rank) %>%
+  dplyr::select(-rank)
+
+
+xl_tables %>%
+  write.xlsx(file.path(manuscript_figures_path, "gsea_results_2.xlsx"))
+
+
+
+```
+

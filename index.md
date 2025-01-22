@@ -3,6 +3,10 @@
 
 This is the repository related to the scRNAseq analysis from [Blanquart et al, Blood, 2024](https://doi.org/10.1182/blood.2023023529)
 
+![](https://github.com/user-attachments/assets/e01e16c4-1030-4a1e-858a-edab776095a1)
+
+
+
 
 * you can find all scripts related to the analysis on [https://github.com/ImmuneAxisa/NKcell_dysfunction_MM_Blood24](https://github.com/ImmuneAxisa/NKcell_dysfunction_MM_Blood24)
 * the scripts with intermediate analysis files on [Zenodo](https://doi.org/10.5281/zenodo.13359147)

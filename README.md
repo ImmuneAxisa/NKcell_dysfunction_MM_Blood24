@@ -15,7 +15,7 @@ Below structure of scripts are the step by step data curation and then investiga
 
 ## Structural layout
 
-only code is stored on github but full structure with intermediate files can be retrieved on the [Zenodo repository](https://doi.org/10.5281/zenodo.13359147)
+only code is stored on github but full structure with intermediate files can be retrieved on the [Zenodo repository](https://doi.org/10.5281/zenodo.13359146)
 
 ```{r eval=FALSE, include=TRUE}
 NKcell_dysfunction_MM_Blood24

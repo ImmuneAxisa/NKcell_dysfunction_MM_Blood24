@@ -1,3 +1,7 @@
+[![Paper](https://img.shields.io/badge/%F0%9F%A9%B8_Blood-10.1182/blood.2023023529-darkred)](https://doi.org/10.1182/blood.2023023529)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14802187.svg)](https://doi.org/10.5281/zenodo.14802187)
+[![GitHub Page](https://img.shields.io/badge/GitHub%20Page-NKcell_dysfunction_MM_Blood24-blue?logo=github)](https://immuneaxisa.github.io/NKcell_dysfunction_MM_Blood24/index.html)
+
 ## Summary
 
 This repository contains the scripts yielding to the processed scRNAseq data of NK cells in Multiple Myeloma patients.
